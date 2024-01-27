@@ -13,7 +13,6 @@ public class Transmission extends BaseService {
     @Override
     public void onCreate() {
         super.onCreate();
-        Constants.ENTITY_SERVICE_MAP.put(serviceDescriptor.getName(), Transmission.class);
         initializeULink(serviceDescriptor);
     }
 

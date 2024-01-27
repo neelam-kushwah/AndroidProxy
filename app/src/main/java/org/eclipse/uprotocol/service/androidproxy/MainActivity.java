@@ -9,6 +9,7 @@ import android.content.Intent;
 import android.os.Bundle;
 import androidx.appcompat.app.AppCompatActivity;
 
+import org.eclipse.uprotocol.service.androidproxy.utils.Constants;
 import org.eclipse.uprotocol.service.androidproxy.vehicleservice.BodyMirrors;
 import org.eclipse.uprotocol.service.androidproxy.vehicleservice.Braking;
 import org.eclipse.uprotocol.service.androidproxy.vehicleservice.CabinClimate;
@@ -29,17 +30,19 @@ public class MainActivity extends AppCompatActivity {
 
         // Start the SocketServerService when the activity is created
         startService(new Intent(this, AndroidProxyService.class));
-        startService(new Intent(this, BodyMirrors.class));
-        startService(new Intent(this, Braking.class));
-        startService(new Intent(this, CabinClimate.class));
-        startService(new Intent(this, Chassis.class));
-        startService(new Intent(this, Engine.class));
-        startService(new Intent(this, Exterior.class));
-        startService(new Intent(this, HelloWorld.class));
-        startService(new Intent(this, Horn.class));
-        startService(new Intent(this, Suspension.class));
-        startService(new Intent(this, Transmission.class));
-        startService(new Intent(this, Vehicle.class));
+        //vehicle service will start only when there is request from host
+        Constants.ENTITY_SERVICE_MAP.put("body.cabin_climate", CabinClimate.class);
+        Constants.ENTITY_SERVICE_MAP.put("body.mirrors", BodyMirrors.class);
+        Constants.ENTITY_SERVICE_MAP.put("chassis.braking", Braking.class);
+        Constants.ENTITY_SERVICE_MAP.put("chassis", Chassis.class);
+        Constants.ENTITY_SERVICE_MAP.put("propulsion.engine", Engine.class);
+        Constants.ENTITY_SERVICE_MAP.put("vehicle.exterior", Exterior.class);
+        Constants.ENTITY_SERVICE_MAP.put("example.hello_world", HelloWorld.class);
+        Constants.ENTITY_SERVICE_MAP.put("body.horn", Horn.class);
+        Constants.ENTITY_SERVICE_MAP.put("chassis.suspension", Suspension.class);
+        Constants.ENTITY_SERVICE_MAP.put("propulsion.transmission", Transmission.class);
+        Constants.ENTITY_SERVICE_MAP.put("vehicle", Vehicle.class);
+
 
     }
 }

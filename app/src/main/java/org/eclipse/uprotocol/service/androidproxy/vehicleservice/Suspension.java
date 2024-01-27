@@ -13,7 +13,6 @@ public class Suspension extends BaseService {
     @Override
     public void onCreate() {
         super.onCreate();
-        Constants.ENTITY_SERVICE_MAP.put(serviceDescriptor.getName(), Suspension.class);
         initializeULink(serviceDescriptor);
     }
 

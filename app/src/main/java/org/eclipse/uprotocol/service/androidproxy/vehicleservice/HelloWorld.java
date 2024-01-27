@@ -13,7 +13,6 @@ public class HelloWorld extends BaseService {
     @Override
     public void onCreate() {
         super.onCreate();
-        Constants.ENTITY_SERVICE_MAP.put(serviceDescriptor.getName(), HelloWorld.class);
         initializeULink(serviceDescriptor);
     }
 

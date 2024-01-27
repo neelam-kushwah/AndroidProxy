@@ -13,7 +13,6 @@ import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.Service;
-import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
@@ -35,11 +34,15 @@ import org.eclipse.uprotocol.core.usubscription.v3.SubscriptionResponse;
 import org.eclipse.uprotocol.core.usubscription.v3.SubscriptionStatus;
 import org.eclipse.uprotocol.core.usubscription.v3.USubscription;
 import org.eclipse.uprotocol.core.usubscription.v3.UnsubscribeRequest;
+import org.eclipse.uprotocol.rpc.CallOptions;
 import org.eclipse.uprotocol.service.androidproxy.utils.Constants;
 import org.eclipse.uprotocol.service.androidproxy.utils.Utils;
 import org.eclipse.uprotocol.transport.UListener;
+import org.eclipse.uprotocol.transport.builder.UAttributesBuilder;
 import org.eclipse.uprotocol.uri.serializer.LongUriSerializer;
+import org.eclipse.uprotocol.uuid.serializer.LongUuidSerializer;
 import org.eclipse.uprotocol.v1.UAttributes;
+import org.eclipse.uprotocol.v1.UCode;
 import org.eclipse.uprotocol.v1.UEntity;
 import org.eclipse.uprotocol.v1.UMessage;
 import org.eclipse.uprotocol.v1.UPayload;
@@ -60,6 +63,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.function.BiConsumer;
 
 public class AndroidProxyService extends Service {
 
@@ -128,20 +132,41 @@ public class AndroidProxyService extends Service {
         });
     }
 
-    static void sendPublishStatus(Socket mClientSocket, UStatus status) {
+    static synchronized void sendStatusToHost(Socket mClientSocket, UStatus status, String action) {
         JSONObject jsonObj = new JSONObject();
         try {
-            synchronized (mClientSocket) {
-                PrintWriter wr = new PrintWriter(mClientSocket.getOutputStream());
-                String serializedMsg = Base64ProtobufSerializer.deserialize(status.toByteArray());
-                jsonObj.put(Constants.ACTION, Constants.STATUS_PUBLISH);
-                jsonObj.put(Constants.ACTION_DATA, serializedMsg);
-                Log.d(LOG_TAG, "Sending publish status to host: " + jsonObj);
+            PrintWriter wr = new PrintWriter(mClientSocket.getOutputStream());
+            String serializedMsg = Base64ProtobufSerializer.deserialize(status.toByteArray());
+            jsonObj.put(Constants.ACTION, action);
+            jsonObj.put(Constants.ACTION_DATA, serializedMsg);
+            Log.d(LOG_TAG, "Sending " + action + " to host: " + jsonObj);
+            wr.println(jsonObj);
+            wr.flush();
+        } catch (JSONException | IOException e) {
+            Log.e(LOG_TAG, Objects.requireNonNullElse(e.getMessage(), "Exception occurs while sending " + action + " to host"));
+        }
+    }
+
+    static synchronized void sendRpcResponseToHost(Socket clientSocket, UMessage msg) {
+        JSONObject jsonObj = new JSONObject();
+        String serializedMsg = Base64ProtobufSerializer.deserialize(msg.toByteArray());
+        try {
+            jsonObj.put(Constants.ACTION, Constants.ACTION_RPC_RESPONSE);
+            jsonObj.put(Constants.ACTION_DATA, serializedMsg);
+            try {
+                PrintWriter wr = new PrintWriter(clientSocket.getOutputStream());
                 wr.println(jsonObj);
                 wr.flush();
+                Log.d(LOG_TAG, "Sending rpc response to host: " + jsonObj);
+
+            } catch (IOException e) {
+                e.printStackTrace();
+                // Log the exception and continue with the next socket
+                Log.e(LOG_TAG, "Exception occurs while sending rpc response to host", e);
             }
-        } catch (JSONException | IOException e) {
-            Log.e(LOG_TAG, Objects.requireNonNullElse(e.getMessage(), "Exception occurs while sending publish status to host"));
+
+        } catch (JSONException e) {
+            Log.e(LOG_TAG, Objects.requireNonNullElse(e.getMessage(), "Exception occurs while sending topic status to host"));
         }
     }
 
@@ -219,19 +244,16 @@ public class AndroidProxyService extends Service {
     }
 
     private void startServer() {
-        serverThread = new Thread(new Runnable() {
-            @Override
-            public void run() {
-                try {
-                    serverSocket = new ServerSocket(6095); // Use your desired port
-                    while (!Thread.currentThread().isInterrupted()) {
-                        Socket socket = serverSocket.accept();
-                        CommunicationThread commThread = new CommunicationThread(socket);
-                        new Thread(commThread).start();
-                    }
-                } catch (IOException e) {
-                    Log.e("SocketServerService", "Error starting server: " + e.getMessage());
+        serverThread = new Thread(() -> {
+            try {
+                serverSocket = new ServerSocket(6095); // Use your desired port
+                while (!Thread.currentThread().isInterrupted()) {
+                    Socket socket = serverSocket.accept();
+                    CommunicationThread commThread = new CommunicationThread(socket);
+                    new Thread(commThread).start();
                 }
+            } catch (IOException e) {
+                Log.e("SocketServerService", "Error starting server: " + e.getMessage());
             }
         });
         serverThread.start();
@@ -328,8 +350,10 @@ public class AndroidProxyService extends Service {
                             case Constants.ACTION_PUBLISH -> performSend(data);
                             case Constants.ACTION_START_SERVICE -> startVehicleService(data);
                             case Constants.ACTION_SUBSCRIBE -> performSubscribe(data);
-                            case Constants.ACTION_INVOKE_METHOD ->
-                                    Log.i(LOG_TAG, "Call Invoke method");
+                            case Constants.ACTION_REGISTER_RPC -> performRegisterRPC(data);
+                            case Constants.ACTION_RPC_RESPONSE -> performRpcResponse(data);
+                            case Constants.ACTION_INVOKE_METHOD -> performInvokeMethod(data);
+
                             default -> {
                             }
                         }
@@ -352,12 +376,93 @@ public class AndroidProxyService extends Service {
             }
         }
 
+        private void performInvokeMethod(String data) {
+            byte[] umsgBytes = Base64ProtobufSerializer.serialize(data);
+            try {
+                UMessage message = UMessage.parseFrom(umsgBytes);
+                CompletionStage<UPayload> payloadCompletionStage = mULink.invokeMethod(message.getSource(), message.getPayload(), CallOptions.DEFAULT);
+                payloadCompletionStage.whenComplete((responseData, exception) -> {
+                    Log.i(LOG_TAG, "received response");
+                    if (exception != null) {
+                        UStatus status = toStatus(exception);
+
+                        Log.e(LOG_TAG, "Failed to get response "+status.getMessage());
+
+                        return;
+                    }
+                    UAttributes reqAttr = message.getAttributes();
+                    UMessage responsemsg = UMessage.newBuilder().setPayload(responseData).setSource(reqAttr.getSink()).setAttributes(UAttributesBuilder.response(reqAttr.getPriority(), message.getSource(), reqAttr.getId()).build()).build();
+                    sendRpcResponseToHost(this.clientSocket, responsemsg);
+                });
+            } catch (Exception ex) {
+                ex.printStackTrace();
+            }
+
+        }
+
+
+        private void performRpcResponse(String data) {
+            byte[] umsgBytes = Base64ProtobufSerializer.serialize(data);
+            try {
+                UMessage message = UMessage.parseFrom(umsgBytes);
+                String methodUri = LongUriSerializer.instance().serialize(message.getSource());
+                //set rpc response to bus
+                if (Constants.COMPLETE_FUTURE_REQ_RES.containsKey(methodUri)) {
+
+                    CompletableFuture<UPayload> future = Constants.COMPLETE_FUTURE_REQ_RES.get(methodUri);
+                    if (future != null) {
+                        future.complete(message.getPayload());
+                    }
+                }
+
+
+            } catch (InvalidProtocolBufferException ex) {
+                ex.printStackTrace();
+            }
+        }
+
+        private void performRegisterRPC(String data) {
+            byte[] uriBytes = Base64ProtobufSerializer.serialize(data);
+            UUri uUri = UUri.getDefaultInstance();
+            try {
+                uUri = UUri.parseFrom(uriBytes);
+                BaseService serviceClass = Constants.ENTITY_BASESERVICE.get(uUri.getEntity().getName());
+                if (serviceClass != null) {
+                    UStatus uStatus = serviceClass.registerMethod(uUri);
+                    if (uStatus.getCode() == UCode.OK) {
+                        //save socket to send received rpc request to mock service
+                        Constants.RPC_SOCKET_LIST.put(LongUriSerializer.instance().serialize(uUri), this.clientSocket);
+                    }
+                    //write status to client socket
+                    sendStatusToHost(this.clientSocket, uStatus, Constants.STATUS_REGISTER_RPC);
+
+                } else {
+                    Log.i(LOG_TAG, "Can't register rpc, Android service not found for entity: " + uUri.getEntity().getName());
+
+
+                }
+
+
+            } catch (Exception ex) {
+                Log.e(LOG_TAG, Objects.requireNonNullElse(ex.getMessage(), "Exception occurs while registering rpc/method uri " + uUri.getEntity().getName()));
+            }
+        }
+
         private void performSubscribe(String data) {
             byte[] uriBytes = Base64ProtobufSerializer.serialize(data);
             UUri uUri = UUri.getDefaultInstance();
             try {
                 uUri = UUri.parseFrom(uriBytes);
-                subscribe(uUri, this.clientSocket);
+                CompletableFuture<UStatus> uStatusCompletableFuture = subscribe(uUri, this.clientSocket);
+                uStatusCompletableFuture.whenComplete((uStatus, throwable) -> {
+                    if (throwable != null) {
+                        Log.e(LOG_TAG, "Failed to perform subscribe", throwable);
+                        uStatus = toStatus(throwable);
+
+                    }
+                    sendStatusToHost(clientSocket, uStatus, Constants.STATUS_SUBSCRIBE);
+                });
+
 
             } catch (Exception ex) {
                 Log.e(LOG_TAG, Objects.requireNonNullElse(ex.getMessage(), "Exception occurs while suscribing to topic " + uUri.getEntity().getName()));
@@ -368,8 +473,14 @@ public class AndroidProxyService extends Service {
             PackageManager packageManager = context.getPackageManager();
             Class<? extends Service> serviceClass = Constants.ENTITY_SERVICE_MAP.get(entity);
             if (serviceClass != null) {
-                ComponentName componentName = new ComponentName(context, serviceClass);
-                packageManager.setComponentEnabledSetting(componentName, PackageManager.COMPONENT_ENABLED_STATE_ENABLED, PackageManager.DONT_KILL_APP);
+                // For now its not needed but once we have the real service, we should disable all the service from the android proxy manifest and enable it only when
+                // there is start service request from host. This is because if we enable it by default, then the real service
+                // information will be replaced in ubus and then ubus wont be able to start the real vehicle service.
+
+                /**
+                 ComponentName componentName = new ComponentName(context, serviceClass);
+                 packageManager.setComponentEnabledSetting(componentName, PackageManager.COMPONENT_ENABLED_STATE_ENABLED, PackageManager.DONT_KILL_APP);
+                 **/
                 Intent serviceIntent = new Intent(context, serviceClass);
                 ContextCompat.startForegroundService(context, serviceIntent);
                 Log.i(LOG_TAG, "Starting service for entity: " + entity);
@@ -392,7 +503,8 @@ public class AndroidProxyService extends Service {
                 if (serviceClass != null) {
                     UStatus status = serviceClass.publish(message);
                     //write status to client socket
-                    sendPublishStatus(this.clientSocket, status);
+                    sendStatusToHost(clientSocket, status, Constants.STATUS_PUBLISH);
+
                 } else {
                     Log.i(LOG_TAG, "Can't publish, Android service not found for entity: " + entity);
 
@@ -401,7 +513,6 @@ public class AndroidProxyService extends Service {
 
             } catch (InvalidProtocolBufferException ex) {
                 ex.printStackTrace();
-//                throw new RuntimeException(e);
             }
 
 
