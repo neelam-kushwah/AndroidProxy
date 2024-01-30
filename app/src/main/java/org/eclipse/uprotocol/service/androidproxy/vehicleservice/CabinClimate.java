@@ -11,7 +11,7 @@ public class CabinClimate extends BaseService {
     @Override
     public void onCreate() {
         super.onCreate();
-        initializeULink(serviceDescriptor);
+        initializeUPClient(serviceDescriptor);
     }
 
 }

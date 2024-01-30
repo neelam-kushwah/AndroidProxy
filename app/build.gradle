@@ -63,7 +63,7 @@ dependencies {
     implementation libs.up.client.android.java
     implementation libs.up.java
     implementation libs.opencsv
-    implementation project(path: ':common')
+    implementation libs.grpc.protobuf
     implementation files('libs/uservices-api-0.1.0-SNAPSHOT.jar')
 
 }

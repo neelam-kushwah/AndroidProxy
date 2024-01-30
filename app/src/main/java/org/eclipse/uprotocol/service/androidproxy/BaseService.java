@@ -24,7 +24,7 @@ import androidx.core.app.NotificationCompat;
 import com.google.protobuf.DescriptorProtos;
 import com.google.protobuf.Descriptors;
 
-import org.eclipse.uprotocol.ULink;
+import org.eclipse.uprotocol.UPClient;
 import org.eclipse.uprotocol.UprotocolOptions;
 import org.eclipse.uprotocol.cloudevent.serialize.Base64ProtobufSerializer;
 import org.eclipse.uprotocol.common.UStatusException;
@@ -34,9 +34,8 @@ import org.eclipse.uprotocol.core.usubscription.v3.USubscription;
 import org.eclipse.uprotocol.rpc.URpcListener;
 import org.eclipse.uprotocol.service.androidproxy.utils.Constants;
 import org.eclipse.uprotocol.service.androidproxy.utils.Utils;
-import org.eclipse.uprotocol.uri.builder.UResourceBuilder;
+import org.eclipse.uprotocol.uri.factory.UResourceBuilder;
 import org.eclipse.uprotocol.uri.serializer.LongUriSerializer;
-import org.eclipse.uprotocol.uuid.serializer.LongUuidSerializer;
 import org.eclipse.uprotocol.v1.UEntity;
 import org.eclipse.uprotocol.v1.UMessage;
 import org.eclipse.uprotocol.v1.UPayload;
@@ -62,27 +61,27 @@ public class BaseService extends Service {
     private Descriptors.ServiceDescriptor serviceDescriptor;
     private UUri SERVICE_URI;
     private String TAG;
-    private ULink mULink;
+    private UPClient mUPClient;
     private USubscription.Stub mUSubscriptionStub;
 
 
-    public void initializeULink(Descriptors.ServiceDescriptor serviceDescriptor) {
+    public void initializeUPClient(Descriptors.ServiceDescriptor serviceDescriptor) {
         this.serviceDescriptor = serviceDescriptor;
 
         UEntity SERVICE = UEntity.newBuilder().setName(getVehicleServiceName()).setVersionMajor(getServiceVersion()).build();
         TAG = SERVICE.getName();
         SERVICE_URI = UUri.newBuilder().setEntity(SERVICE).build();
-        mULink = ULink.create(getApplicationContext(), SERVICE, mExecutor, (link, ready) -> {
+        mUPClient = UPClient.create(getApplicationContext(), SERVICE, mExecutor, (client, ready) -> {
             if (ready) {
-                Log.i(TAG, join(Key.EVENT, "uLink connected"));
+                Log.i(TAG, join(Key.EVENT, "up client connected"));
             } else {
-                Log.w(TAG, join(Key.EVENT, "uLink unexpectedly disconnected"));
+                Log.w(TAG, join(Key.EVENT, "up client unexpectedly disconnected"));
             }
         });
-        mUSubscriptionStub = USubscription.newStub(mULink);
+        mUSubscriptionStub = USubscription.newStub(mUPClient);
         List<UUri> topics = Utils.readTopicsFromEntity(SERVICE.getName());
 
-        mULink.connect().thenCompose(status -> {
+        mUPClient.connect().thenCompose(status -> {
             logStatus("connect", status);
             return isOk(status) ? CompletableFuture.completedFuture(status) : CompletableFuture.failedFuture(new UStatusException(status));
         }).thenCompose(it -> {
@@ -110,21 +109,21 @@ public class BaseService extends Service {
 
     public UStatus registerMethod(@NonNull UUri methodUri) {
 //        return CompletableFuture.supplyAsync(() -> {
-            final UStatus status = mULink.registerRpcListener(methodUri, mURpcListener);
+            final UStatus status = mUPClient.registerRpcListener(methodUri, mURpcListener);
 
             return logStatus("registerMethod", status, Key.URI, stringify(methodUri));
 //        });
     }
 
     public UStatus publish(@NonNull UMessage message) {
-        final UStatus status = mULink.send(message);
+        final UStatus status = mUPClient.send(message);
         logStatus("publish", status, Key.TOPIC, stringify(message.getSource()));
         return status;
     }
 
     private CompletableFuture<UStatus> unregisterMethod(@NonNull UUri methodUri) {
         return CompletableFuture.supplyAsync(() -> {
-            final UStatus status = mULink.unregisterRpcListener(methodUri, mURpcListener);
+            final UStatus status = mUPClient.unregisterRpcListener(methodUri, mURpcListener);
             return logStatus("unregisterMethod", status, Key.URI, stringify(methodUri));
         });
     }
@@ -217,7 +216,7 @@ public class BaseService extends Service {
             CompletableFuture<UStatus> topicFuture = unregisterMethod(UUri.newBuilder(SERVICE_URI).setResource(UResourceBuilder.forRpcRequest(rpc)).build());
             rpcs.add(topicFuture);
         }
-        CompletableFuture.allOf(rpcs.toArray(new CompletableFuture[0])).exceptionally(exception -> null).thenCompose(it -> mULink.disconnect()).whenComplete((status, exception) -> logStatus("disconnect", status));
+        CompletableFuture.allOf(rpcs.toArray(new CompletableFuture[0])).exceptionally(exception -> null).thenCompose(it -> mUPClient.disconnect()).whenComplete((status, exception) -> logStatus("disconnect", status));
         super.onDestroy();
     }
 

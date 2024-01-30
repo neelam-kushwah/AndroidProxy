@@ -16,4 +16,3 @@ dependencyResolutionManagement {
 
 rootProject.name = "AndroidProxy"
 include(":app")
-include(":common")

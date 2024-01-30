@@ -24,7 +24,7 @@ import androidx.core.content.ContextCompat;
 
 import com.google.protobuf.InvalidProtocolBufferException;
 
-import org.eclipse.uprotocol.ULink;
+import org.eclipse.uprotocol.UPClient;
 import org.eclipse.uprotocol.cloudevent.serialize.Base64ProtobufSerializer;
 import org.eclipse.uprotocol.common.UStatusException;
 import org.eclipse.uprotocol.common.util.log.Key;
@@ -75,7 +75,7 @@ public class AndroidProxyService extends Service {
     @SuppressLint("StaticFieldLeak")
     static Context context;
     private static USubscription.Stub mUSubscriptionStub;
-    private static ULink mULink;
+    private static UPClient mUPClient;
     private final ExecutorService mExecutor = Executors.newSingleThreadExecutor();
     private ServerSocket serverSocket;
     private Thread serverThread;
@@ -98,7 +98,7 @@ public class AndroidProxyService extends Service {
 
     @SuppressWarnings("SameParameterValue")
     public static CompletableFuture<UStatus> subscribe(@NonNull UUri topic, Socket clientSocket) {
-        final CompletionStage<SubscriptionResponse> subscribeStage = mUSubscriptionStub.subscribe(SubscriptionRequest.newBuilder().setTopic(topic).setSubscriber(SubscriberInfo.newBuilder().setUri(mULink.getClientUri()).build()).build()).whenComplete((response, exception) -> {
+        final CompletionStage<SubscriptionResponse> subscribeStage = mUSubscriptionStub.subscribe(SubscriptionRequest.newBuilder().setTopic(topic).setSubscriber(SubscriberInfo.newBuilder().setUri(mUPClient.getUri()).build()).build()).whenComplete((response, exception) -> {
             if (exception != null) { // Communication failure
                 final UStatus status = toStatus(exception);
                 logStatus("subscribe", status, Key.TOPIC, stringify(topic));
@@ -127,7 +127,7 @@ public class AndroidProxyService extends Service {
     public static @NonNull CompletableFuture<UStatus> registerListener(@NonNull UUri topic) {
         return CompletableFuture.supplyAsync(() -> {
 
-            final UStatus status = mULink.registerListener(topic, mUListener);
+            final UStatus status = mUPClient.registerListener(topic, mUListener);
             return logStatus("registerListener", status, Key.TOPIC, stringify(topic));
         });
     }
@@ -211,15 +211,15 @@ public class AndroidProxyService extends Service {
         context = this;
         createNotificationChannel();
 
-        mULink = ULink.create(getApplicationContext(), AP_ENTITY, mExecutor, (link, ready) -> {
+        mUPClient = UPClient.create(getApplicationContext(), AP_ENTITY, mExecutor, (client, ready) -> {
             if (ready) {
-                Log.i(LOG_TAG, join(Key.EVENT, "AP uLink connected"));
+                Log.i(LOG_TAG, join(Key.EVENT, "AP client connected"));
             } else {
-                Log.w(LOG_TAG, join(Key.EVENT, "uLink unexpectedly disconnected"));
+                Log.w(LOG_TAG, join(Key.EVENT, "up client unexpectedly disconnected"));
             }
         });
-        mUSubscriptionStub = USubscription.newStub(mULink);
-        mULink.connect().thenCompose(status -> {
+        mUSubscriptionStub = USubscription.newStub(mUPClient);
+        mUPClient.connect().thenCompose(status -> {
             logStatus("AP connect", status);
             return isOk(status) ? CompletableFuture.completedFuture(status) : CompletableFuture.failedFuture(new UStatusException(status));
         });
@@ -295,14 +295,14 @@ public class AndroidProxyService extends Service {
 
     public @NonNull CompletableFuture<UStatus> unregisterListener(@NonNull UUri topic) {
         return CompletableFuture.supplyAsync(() -> {
-            final UStatus status = mULink.unregisterListener(topic, mUListener);
+            final UStatus status = mUPClient.unregisterListener(topic, mUListener);
             return logStatus("unregisterListener", status, Key.TOPIC, stringify(topic));
         });
     }
 
     @SuppressWarnings("SameParameterValue")
     public CompletableFuture<UStatus> unsubscribe(@NonNull UUri topic) {
-        final CompletionStage<UStatus> unsubscribeStage = mUSubscriptionStub.unsubscribe(UnsubscribeRequest.newBuilder().setTopic(topic).setSubscriber(SubscriberInfo.newBuilder().setUri(mULink.getClientUri()).build()).build()).whenComplete((status, exception) -> {
+        final CompletionStage<UStatus> unsubscribeStage = mUSubscriptionStub.unsubscribe(UnsubscribeRequest.newBuilder().setTopic(topic).setSubscriber(SubscriberInfo.newBuilder().setUri(mUPClient.getUri()).build()).build()).whenComplete((status, exception) -> {
             if (exception != null) { // Communication failure
                 status = toStatus(exception);
                 logStatus("unsubscribe", status, Key.TOPIC, stringify(topic));
@@ -380,7 +380,7 @@ public class AndroidProxyService extends Service {
             byte[] umsgBytes = Base64ProtobufSerializer.serialize(data);
             try {
                 UMessage message = UMessage.parseFrom(umsgBytes);
-                CompletionStage<UPayload> payloadCompletionStage = mULink.invokeMethod(message.getSource(), message.getPayload(), CallOptions.DEFAULT);
+                CompletionStage<UMessage> payloadCompletionStage = mUPClient.invokeMethod(message.getSource(), message.getPayload(), CallOptions.DEFAULT);
                 payloadCompletionStage.whenComplete((responseData, exception) -> {
                     Log.i(LOG_TAG, "received response");
                     if (exception != null) {
@@ -390,9 +390,11 @@ public class AndroidProxyService extends Service {
 
                         return;
                     }
-                    UAttributes reqAttr = message.getAttributes();
-                    UMessage responsemsg = UMessage.newBuilder().setPayload(responseData).setSource(reqAttr.getSink()).setAttributes(UAttributesBuilder.response(reqAttr.getPriority(), message.getSource(), reqAttr.getId()).build()).build();
-                    sendRpcResponseToHost(this.clientSocket, responsemsg);
+
+                    UAttributes reqAttr = responseData.getAttributes();
+                    UMessage responseMsg = responseData.toBuilder().setAttributes(reqAttr.toBuilder().setReqid(message.getAttributes().getId()).build()).build();
+
+                    sendRpcResponseToHost(this.clientSocket, responseMsg);
                 });
             } catch (Exception ex) {
                 ex.printStackTrace();
