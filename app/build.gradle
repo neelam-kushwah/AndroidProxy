@@ -23,8 +23,14 @@ android {
     defaultConfig {
         minSdk config.minSdkVersion
         targetSdk config.sdkVersion
+
         versionCode 1
-        versionName '1.0'
+        versionName "1.0"
+        archivesBaseName = "uPAndroidProxy_" + versionName
+
+    }
+    buildFeatures {
+        buildConfig true
     }
 
     signingConfigs {
@@ -36,7 +42,6 @@ android {
         }
     }
 
-    base.archivesName = 'uPAndroidProxy'
     buildTypes {
         release {
             signingConfig signingConfigs.platform

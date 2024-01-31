@@ -5,8 +5,11 @@
  */
 
 package org.eclipse.uprotocol.service.androidproxy;
+import android.annotation.SuppressLint;
 import android.content.Intent;
 import android.os.Bundle;
+import android.widget.TextView;
+
 import androidx.appcompat.app.AppCompatActivity;
 
 import org.eclipse.uprotocol.service.androidproxy.utils.Constants;
@@ -24,9 +27,15 @@ import org.eclipse.uprotocol.service.androidproxy.vehicleservice.Vehicle;
 
 public class MainActivity extends AppCompatActivity {
 
+    @SuppressLint("SetTextI18n")
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_main);
+        // Access properties from gradle.properties
+        String appVersionName = BuildConfig.VERSION_NAME;
+        TextView tv = (TextView) findViewById(R.id.tvVersion);
+        tv.setText(getString(R.string.version) + appVersionName);
 
         // Start the SocketServerService when the activity is created
         startService(new Intent(this, AndroidProxyService.class));
